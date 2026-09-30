@@ -23,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only if the package is missing
     anthropic = None
 
-MODEL = "claude-sonnet-5"
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
 
 
 def _get_client() -> Tuple[Optional["anthropic.Anthropic"], Optional[str]]:
