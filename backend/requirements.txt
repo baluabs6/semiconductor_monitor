@@ -1,0 +1,5 @@
+fastapi>=0.141
+uvicorn>=0.30
+sanic>=23
+blacksheep>=2.6
+anthropic>=1.8
