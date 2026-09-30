@@ -26,7 +26,7 @@ cd backend && pip install -r requirements.txt
 uvicorn fastapi_app:app --port 8001
 
 # 2) start the Spring AI service
-export ANTHROPIC_API_KEY=your-key
+export ANTHROPIC_API_KEY=****
 cd ../spring_ai_service
 mvn spring-boot:run
 ```
