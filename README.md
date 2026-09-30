@@ -137,3 +137,10 @@ which all API replicas read from.
 - **Dashboard**: `alerts.log` is CSV-like (`timestamp,source,severity,message`)
   so it's easy to tail into a Grafana/Streamlit dashboard if you want a UI
   beyond the console.
+
+## Spring AI service (Java)
+
+`spring_ai_service/` is a Spring Boot + Spring AI (Claude) service that sits next to the Python
+backend and calls its REST API. It adds typed AI endpoints (`/ai/analyze`, `/ai/report`) and a tool-calling
+`/ai/chat` where Claude can query live alerts itself. C, C++ and Python are untouched. See
+`spring_ai_service/README.md`.
