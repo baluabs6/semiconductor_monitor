@@ -1,5 +1,6 @@
 package com.semimonitor.ai.web;
 
+import com.semimonitor.ai.model.ContainmentProposal;
 import com.semimonitor.ai.model.IncidentAnalysis;
 import com.semimonitor.ai.model.ShiftReport;
 import com.semimonitor.ai.security.Redactor;
@@ -39,6 +40,12 @@ public class AiController {
     }
 
     /** conversationId is optional; requests that share one id share chat memory. */
+    /** Excursion-containment PROPOSAL (which lots to consider holding). Requires human approval; nothing is executed. */
+    @GetMapping("/containment")
+    public ContainmentProposal containment(@RequestParam(defaultValue = "8") double hours) {
+        return ai.containment(hours);
+    }
+
     public record ChatRequest(String question, String conversationId) { }
 
     @PostMapping("/chat")

@@ -1,0 +1,12 @@
+# Fully local model through Ollama: no data leaves the machine, no API key, no internet at run time.
+# Build:  mvn -Pollama package       Run:  SPRING_PROFILES_ACTIVE=ollama java -jar target/spring-ai-service-0.1.0.jar
+# Pull a tool-capable model first, e.g.:  ollama pull ${OLLAMA_MODEL}
+spring:
+  ai:
+    model:
+      chat: ollama                    # switches the Anthropic auto-configuration off
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${OLLAMA_MODEL:llama3.1}

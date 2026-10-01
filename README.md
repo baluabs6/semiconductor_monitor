@@ -12,7 +12,7 @@
 | Persistence | **SQLite** | Alert history that survives restarts |
 | REST + WebSocket APIs | **FastAPI** (Uvicorn), **Sanic**, **BlackSheep** | Three interchangeable backends exposing the same API |
 | AI service | **Java 17, Spring Boot 3.5, Spring AI 1.1** | Typed AI endpoints and tool-calling chat |
-| LLM provider | **Anthropic API** | Hosts the Claude model |
+| LLM provider | **Anthropic API** (default), **Amazon Bedrock** or **Ollama** (optional profiles) | Hosts the Claude model, or a local model for air-gapped sites |
 | Retrieval | **BM25 keyword index** (in-process, no embeddings) | Finds relevant runbook excerpts for the prompt |
 
 ### AI and analytics models
@@ -25,7 +25,7 @@
 | **Regex signature matching** | Rule-based | Python | Detects `ERROR`, `PANIC`, `WDT_RESET` and `NULL_PTR` patterns in firmware logs |
 | **Deduplication with hysteresis** | Rule-based | Python | Alerts on entry and escalation, then again after a cooldown, and emits a RESOLVED alert on recovery |
 
-The Claude model name is configurable with the `ANTHROPIC_MODEL` environment variable. The API key is supplied through `ANTHROPIC_API_KEY=****` and is never stored in the code or in this repository.
+The Claude model name is configurable with the `ANTHROPIC_MODEL` environment variable. With the optional `bedrock` or `ollama` profile the Spring service uses a Bedrock-hosted Claude model or a local Ollama model instead (a local model is a different model with different quality; tool calling and structured output may be weaker). The API key is supplied through `ANTHROPIC_API_KEY=****` and is never stored in the code or in this repository.
 
 ### Architecture
 
@@ -122,14 +122,9 @@ The sensor, ATE, firmware and health inputs are currently simulated. The interfa
 - **Correlated fault scenarios:** set `SCENARIO_INTERVAL_SECONDS=60` to inject cascades such as cooling failure (FAB temperature, then pressure, firmware watchdog reset, ATE leakage failures, controller CPU) that span all four sources, with ground truth recorded for evaluating root-cause analysis.
 - **Spring AI service:** request timeouts and retries, bounded prompt size, source validation, per-conversation chat memory, streamed answers (`POST /ai/chat/stream`), an MCP server that exposes the read-only tools to Claude Desktop or Claude Code, an optional `X-API-Key` check, and Prometheus metrics at `/actuator/prometheus`.
 - **Advisors and runbook retrieval (Spring AI):** a `RedactionAdvisor` masks every prompt and answer on every call, an `AuditAdvisor` logs metadata only (never text) and publishes token/latency metrics, and a `RetrievalAugmentationAdvisor` adds relevant runbook excerpts, which Claude cites by name. The bundled runbooks are samples; point `RUNBOOKS_DIR` at your own.
+- **Lot genealogy and excursion containment:** every alert is stamped with tool, lot, wafer, recipe and step. `GET /containment` (all three backends) lists the lots exposed during a critical excursion with a deterministic risk (HIGH/MEDIUM), and the Spring service's `GET /ai/containment` turns that into a **proposal** for a human to approve: Claude writes the rationale, but it cannot add lots, cannot downgrade a HIGH-risk lot to "monitor", and nothing is held or released automatically. The lot feed is simulated; connect your MES / SECS-GEM events to `LotTracker.start_lot()`.
+- **Prompt-injection hardening:** alert and log text is sanitized before it enters any prompt (invisible characters removed, newlines collapsed, `<` and `>` escaped, length bounded), so a hostile log line cannot close the `<alerts>` block or forge extra alert entries. A shared corpus of hostile lines (`shared/injection_corpus.json`) is tested in Python and Java, and `backend/tests/injection_eval.py` runs it live against the model (not part of CI).
+- **Configurable masking:** organization-specific patterns and an allow-list can be added (`REDACT_EXTRA_PATTERNS` / `REDACT_ALLOWLIST` for Python, `monitor.redaction.*` for Java), and masking now also covers log output and stack traces (side effect: IPv4 addresses, including client IPs in access logs, appear as `****`).
+- **Private and air-gapped options:** the Spring service can use Claude through Amazon Bedrock (`mvn -Pbedrock`, profile `bedrock`) or a fully local model through Ollama (`mvn -Pollama`, profile `ollama`), and `AI_DISABLED=true` stops the Python backend from calling any external AI service.
 - **Tests and CI:** C++ tests under AddressSanitizer/UBSan, Python tests, the detector backtest with pass/fail gates, and Java unit tests. Python and Java share one set of redaction test vectors (`shared/redaction_cases.json`).
 - **Run everything:** `docker compose up --build` (see `.env.example`; the real `.env` is not committed).
-
-## Sensitive Data Masking
-
-Sensitive data is masked as `****` in both the documentation and the code:
-
-- **What is masked:** API keys (`sk-...`), Bearer tokens, JWTs, private-key blocks, `key=value` secrets (`api_key`, `token`, `password`, `secret`, `authorization`, ...), credentials inside URLs, AWS access key IDs, e-mail addresses and IPv4 addresses.
-- **Python** (`backend/core/redact.py`): applied when an alert is created, so the in-memory buffer, SQLite history, REST responses and WebSocket pushes only ever contain masked text. It is also applied before alert text is sent to Claude, on AI error messages, and in the console tool's screen output and `alerts.log`.
-- **Java** (`spring_ai_service/.../security/Redactor.java`): applied to alerts fetched from the backend, to the user's chat question before it reaches Claude, to Claude's chat answer, and to error details.
-- **Limits:** masking is pattern-based, so it is a safety net rather than a guarantee. A secret with no recognizable shape or label can still get through, so avoid logging secrets in the first place. Alerts stored before masking was added are not rewritten.

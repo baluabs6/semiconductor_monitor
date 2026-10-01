@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <!-- Every log line and stack trace goes through the Redactor, whichever library wrote it. -->
+  <conversionRule conversionWord="maskedMsg" converterClass="com.semimonitor.ai.logging.MaskingMessageConverter"/>
+  <conversionRule conversionWord="maskedEx" converterClass="com.semimonitor.ai.logging.MaskingThrowableConverter"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} : %maskedMsg%n%maskedEx</pattern>
+    </encoder>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

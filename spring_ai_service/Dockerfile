@@ -5,7 +5,8 @@ COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
 COPY src ./src
 # Tests run in CI (they read ../shared/redaction_cases.json, which is outside this build context).
-RUN mvn -B -q package -DskipTests
+ARG MAVEN_PROFILE=
+RUN mvn -B -q package -DskipTests ${MAVEN_PROFILE:+-P$MAVEN_PROFILE}
 
 FROM eclipse-temurin:17-jre
 RUN useradd -m app

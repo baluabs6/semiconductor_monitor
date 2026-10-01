@@ -12,8 +12,10 @@ import json
 from sanic import Sanic, response
 
 from core.engine import MonitorEngine
+from core.redact import install_logging_redaction
 from core.ai_insights import analyze_alert_burst, summarize_shift
 
+install_logging_redaction()  # mask secrets in every log record
 engine = MonitorEngine(db_path=os.environ.get("ALERTS_DB_PATH", "alerts_sanic.db"))
 app = Sanic("semiconductor_monitor_sanic")
 
@@ -50,6 +52,16 @@ async def alerts_history(request):
 @app.get("/summary")
 async def summary(request):
     return response.json(engine.get_summary())
+
+
+@app.get("/lots")
+async def lots(request):
+    return response.json(engine.get_lots(limit=int(request.args.get("limit", 50))))
+
+
+@app.get("/containment")
+async def containment(request):
+    return response.json(engine.get_containment(hours=float(request.args.get("hours", 8.0))))
 
 
 @app.get("/alerts/analyze")

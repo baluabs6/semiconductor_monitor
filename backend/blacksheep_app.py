@@ -10,8 +10,10 @@ import os
 from blacksheep import Application, Request, WebSocket, json
 
 from core.engine import MonitorEngine
+from core.redact import install_logging_redaction
 from core.ai_insights import analyze_alert_burst, summarize_shift
 
+install_logging_redaction()  # mask secrets in every log record
 engine = MonitorEngine(db_path=os.environ.get("ALERTS_DB_PATH", "alerts_blacksheep.db"))
 app = Application()
 
@@ -48,6 +50,16 @@ async def alerts_history(request: Request):
 @app.router.get("/summary")
 async def summary():
     return json(engine.get_summary())
+
+
+@app.router.get("/lots")
+async def lots(request: Request):
+    return json(engine.get_lots(limit=int(request.query.get("limit", ["50"])[0])))
+
+
+@app.router.get("/containment")
+async def containment(request: Request):
+    return json(engine.get_containment(hours=float(request.query.get("hours", ["8.0"])[0])))
 
 
 @app.router.get("/alerts/analyze")

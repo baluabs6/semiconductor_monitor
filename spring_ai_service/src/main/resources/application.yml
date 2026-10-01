@@ -6,7 +6,7 @@ spring:
     name: semiconductor-spring-ai
   ai:
     anthropic:
-      api-key: ${ANTHROPIC_API_KEY}
+      api-key: ${ANTHROPIC_API_KEY:}   # required only when the anthropic provider is active (default)
       chat:
         options:
           model: ${ANTHROPIC_MODEL:claude-sonnet-5-5}

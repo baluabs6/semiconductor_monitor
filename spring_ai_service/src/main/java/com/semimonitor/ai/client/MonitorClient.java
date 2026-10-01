@@ -1,6 +1,7 @@
 package com.semimonitor.ai.client;
 
 import com.semimonitor.ai.model.AlertDto;
+import com.semimonitor.ai.model.ContainmentReport;
 import com.semimonitor.ai.security.Redactor;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -74,6 +75,15 @@ public class MonitorClient {
                 .filter(a -> !a.toInstant().isBefore(cutoff))
                 .sorted((a, b) -> Long.compare(a.id(), b.id()))
                 .toList();
+    }
+
+    /** Deterministic excursion-containment report (which lots were exposed). */
+    public ContainmentReport containment(double hours) {
+        ContainmentReport raw = withRetry(() -> http.get()
+                .uri(u -> u.path("/containment").queryParam("hours", hours).build())
+                .retrieve()
+                .body(ContainmentReport.class));
+        return raw;
     }
 
     public Map<String, Integer> summary() {

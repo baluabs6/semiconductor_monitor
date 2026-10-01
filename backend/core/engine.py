@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 from collections import deque
 from typing import Optional
 
+from core.genealogy import LotTracker
 from core.redact import redact
 
 # --------------------------------------------------------------------------
@@ -101,6 +102,11 @@ class Alert:
     source: str       # FAB, ATE, FIRMWARE, HEALTH
     severity: str      # INFO, WARNING, CRITICAL
     message: str
+    tool_id: str = ""
+    lot_id: str = ""
+    wafer_id: str = ""
+    recipe: str = ""
+    step: str = ""
 
     def as_dict(self):
         return asdict(self)
@@ -163,6 +169,9 @@ class MonitorEngine:
         self.scenario_interval = (float(os.environ.get("SCENARIO_INTERVAL_SECONDS", "0"))
                                   if scenario_interval is None else scenario_interval)
         self.scenarios = []  # ground truth for evaluation: [{name, start, end, first_alert_id, last_alert_id}]
+        self.lots = LotTracker(tool_id=os.environ.get("TOOL_ID", "TOOL-01"))
+        # seconds between simulated lot changes (env LOT_INTERVAL_SECONDS)
+        self.lot_interval = float(os.environ.get("LOT_INTERVAL_SECONDS", "45"))
         self.db_path = db_path
         self.dedup = Deduper(cooldown_seconds)
         self.buffer = deque(maxlen=buffer_size)
@@ -192,6 +201,7 @@ class MonitorEngine:
         self._writer.start()
 
         loops = [self._fab_loop, self._ate_loop, self._firmware_loop, self._health_loop]
+        loops.append(self._lot_loop)
         if self.scenario_interval > 0:
             from core.simulator import run_scenarios
             loops.append(lambda: run_scenarios(self, self._stop_event, self.scenario_interval))
@@ -224,7 +234,13 @@ class MonitorEngine:
                 message TEXT NOT NULL
             )"""
         )
+        # add lot-genealogy columns to databases created before they existed
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(alerts)")}
+        for col in ("tool_id", "lot_id", "wafer_id", "recipe", "step"):
+            if col not in existing:
+                conn.execute(f"ALTER TABLE alerts ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_lot ON alerts(lot_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_src_ts ON alerts(source, timestamp)")
         conn.commit()
@@ -249,8 +265,10 @@ class MonitorEngine:
         conn = sqlite3.connect(self.db_path)
         try:
             conn.executemany(
-                "INSERT INTO alerts (id, timestamp, source, severity, message) VALUES (?,?,?,?,?)",
-                [(a.id, a.timestamp, a.source, a.severity, a.message) for a in alerts],
+                "INSERT INTO alerts (id, timestamp, source, severity, message, tool_id, lot_id, wafer_id, recipe, step) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                [(a.id, a.timestamp, a.source, a.severity, a.message, a.tool_id, a.lot_id, a.wafer_id, a.recipe, a.step)
+                 for a in alerts],
             )
             conn.commit()
         finally:
@@ -288,6 +306,7 @@ class MonitorEngine:
             id=next(self._id_counter),
             timestamp=datetime.now().isoformat(timespec="milliseconds"),
             source=source, severity=severity, message=message,
+            **self.lots.current_context(),
         )
         with self.buffer_lock:
             self.buffer.append(alert)
@@ -358,6 +377,77 @@ class MonitorEngine:
         rows = conn.execute(q, params).fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    # -- lot genealogy ------------------------------------------------------
+
+    def _lot_loop(self):
+        """SIMULATED lot feed: a new lot every lot_interval seconds, wafer/step advancing in between.
+        Replace with real MES / SECS-GEM events in production (call self.lots.start_lot(...))."""
+        import random
+        last_lot = time.time()
+        while not self._stop_event.wait(min(3.0, max(0.2, self.lot_interval / 10))):
+            if time.time() - last_lot >= self.lot_interval:
+                self.lots.start_lot(self.lots.next_lot_id(), random.choice(["RCP-A", "RCP-B", "RCP-C"]))
+                last_lot = time.time()
+            else:
+                self.lots.advance()
+
+    def get_lots(self, limit: int = 50):
+        return self.lots.runs(limit=int(_clamp(limit, 1, 500)))
+
+    def get_containment(self, hours: float = 8.0):
+        """
+        Deterministic excursion-containment report (no AI involved): which lots were exposed?
+
+        The excursion window spans the CRITICAL FAB / FIRMWARE / HEALTH alerts in the last `hours`
+        (ATE failures are consequences, not causes). A lot is
+          * HIGH   if it received CRITICAL alerts directly, or >= 3 ATE failures
+          * MEDIUM if it was on the tool during the excursion window, or received WARNINGs
+        Output is a *proposal* for a human to review; nothing is held automatically.
+        """
+        rows = self.get_history_window(hours=hours)
+        causes = [r for r in rows if r["severity"] == "CRITICAL" and r["source"] in ("FAB", "FIRMWARE", "HEALTH")]
+        by_lot = {}
+        for r in rows:
+            if not r.get("lot_id") or r["severity"] == "INFO":
+                continue
+            d = by_lot.setdefault(r["lot_id"], {"CRITICAL": 0, "WARNING": 0, "ate_failures": 0, "sources": set(),
+                                                "recipe": r.get("recipe", ""), "tool_id": r.get("tool_id", "")})
+            d[r["severity"]] += 1
+            d["sources"].add(r["source"])
+            if r["source"] == "ATE":
+                d["ate_failures"] += 1
+
+        window = None
+        exposed = {}
+        if causes:
+            t0 = datetime.fromisoformat(min(r["timestamp"] for r in causes))
+            t1 = datetime.fromisoformat(max(r["timestamp"] for r in causes))
+            window = {"start": t0.isoformat(timespec="milliseconds"), "end": t1.isoformat(timespec="milliseconds"),
+                      "critical_alerts": len(causes)}
+            for run in self.lots.runs_overlapping(t0, t1):
+                exposed[run.lot_id] = run
+
+        lots = []
+        for lot_id in sorted(set(by_lot) | set(exposed)):
+            d = by_lot.get(lot_id, {"CRITICAL": 0, "WARNING": 0, "ate_failures": 0, "sources": set(), "recipe": "", "tool_id": ""})
+            run = exposed.get(lot_id)
+            high = d["CRITICAL"] > 0 or d["ate_failures"] >= 3
+            medium = run is not None or d["WARNING"] > 0
+            if not (high or medium):
+                continue
+            lots.append({
+                "lot_id": lot_id,
+                "tool_id": d["tool_id"] or (run.tool_id if run else ""),
+                "recipe": d["recipe"] or (run.recipe if run else ""),
+                "risk": "HIGH" if high else "MEDIUM",
+                "exposed_during_excursion": run is not None,
+                "critical_alerts": d["CRITICAL"], "warning_alerts": d["WARNING"], "ate_failures": d["ate_failures"],
+                "sources": sorted(d["sources"]),
+            })
+        lots.sort(key=lambda x: (x["risk"] != "HIGH", -x["critical_alerts"], -x["ate_failures"], x["lot_id"]))
+        return {"window_hours": hours, "excursion": window, "lots": lots,
+                "note": "Proposal for human review. No lot has been held or released."}
 
     # -- monitor loops (ported from the console tool, now with dedup/hysteresis) --
 

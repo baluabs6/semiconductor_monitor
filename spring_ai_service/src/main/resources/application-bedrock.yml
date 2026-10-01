@@ -1,0 +1,16 @@
+# Claude through Amazon Bedrock, inside YOUR AWS account (data stays under your cloud agreement).
+# Build:  mvn -Pbedrock package      Run:  SPRING_PROFILES_ACTIVE=bedrock java -jar target/spring-ai-service-0.1.0.jar
+# AWS credentials come from the standard AWS provider chain (instance role, env vars, ~/.aws), not from this file.
+spring:
+  ai:
+    model:
+      chat: bedrock-converse          # switches the Anthropic auto-configuration off
+    bedrock:
+      aws:
+        region: ${AWS_REGION:us-east-1}
+      converse:
+        chat:
+          options:
+            # Look up the exact model / inference-profile ID for your region in the Bedrock console.
+            model: ${BEDROCK_MODEL_ID}
+            max-tokens: 1024

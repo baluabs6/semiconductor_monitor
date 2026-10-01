@@ -2,6 +2,7 @@ package com.semimonitor.ai.security;
 
 import com.semimonitor.ai.model.AlertDto;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -41,11 +42,42 @@ public final class Redactor {
             Pattern.compile("(?<![A-Za-z0-9._%+\\-])[A-Za-z0-9._%+\\-]+@[A-Za-z0-9\\-]+(?:\\.[A-Za-z0-9\\-]+)+");
     private static final Pattern IPV4 = Pattern.compile("\\b" + OCTET + "(?:\\." + OCTET + "){3}\\b");
 
+    private static volatile List<Pattern> extra = List.of();
+    private static volatile List<String> allow = List.of();
+
     private Redactor() { }
+
+    /**
+     * Adds organisation-specific rules: extra regexes to mask (badge IDs, internal hostnames, ...) and
+     * literals that must never be masked. An invalid regex throws, because silently ignoring it would
+     * leave data unmasked. Bound from monitor.redaction.* at start-up (see RedactionConfig).
+     */
+    public static void configure(List<String> extraPatterns, List<String> allowlist) {
+        List<Pattern> compiled = new ArrayList<>();
+        for (String p : extraPatterns == null ? List.<String>of() : extraPatterns) {
+            if (p == null || p.isBlank()) continue;
+            try {
+                compiled.add(Pattern.compile(p));
+            } catch (java.util.regex.PatternSyntaxException e) {
+                throw new IllegalArgumentException("invalid redaction pattern '" + p + "': " + e.getDescription());
+            }
+        }
+        extra = List.copyOf(compiled);
+        allow = allowlist == null ? List.of() : allowlist.stream().filter(a -> a != null && !a.isEmpty()).toList();
+    }
 
     public static String redact(String text) {
         if (text == null || text.isEmpty()) return text;
         if (text.length() > MAX_INPUT_CHARS) text = text.substring(0, MAX_INPUT_CHARS) + "...[truncated]";
+        // protect allow-listed literals from every rule, then restore them
+        List<String> literals = allow;
+        String[] tokens = new String[literals.size()];
+        for (int i = 0; i < literals.size(); i++) {
+            if (text.contains(literals.get(i))) {
+                tokens[i] = "\u0000ALLOW" + i + "\u0000";
+                text = text.replace(literals.get(i), tokens[i]);
+            }
+        }
         text = PRIVATE_KEY.matcher(text).replaceAll(MASK);
         text = JWT.matcher(text).replaceAll(MASK);
         text = URL_CREDS.matcher(text).replaceAll(MASK);
@@ -55,11 +87,16 @@ public final class Redactor {
         text = AWS_KEY.matcher(text).replaceAll(MASK);
         text = EMAIL.matcher(text).replaceAll(MASK);
         text = IPV4.matcher(text).replaceAll(MASK);
+        for (Pattern p : extra) text = p.matcher(text).replaceAll(MASK);
+        for (int i = 0; i < tokens.length; i++) {
+            if (tokens[i] != null) text = text.replace(tokens[i], literals.get(i));
+        }
         return text;
     }
 
     public static AlertDto redact(AlertDto a) {
-        return new AlertDto(a.id(), a.timestamp(), a.source(), a.severity(), redact(a.message()));
+        return new AlertDto(a.id(), a.timestamp(), a.source(), a.severity(), redact(a.message()),
+                a.toolId(), a.lotId(), a.waferId(), a.recipe(), a.step());
     }
 
     public static List<AlertDto> redact(List<AlertDto> alerts) {

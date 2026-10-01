@@ -2,6 +2,7 @@ package com.semimonitor.ai.tools;
 
 import com.semimonitor.ai.client.MonitorClient;
 import com.semimonitor.ai.model.AlertDto;
+import com.semimonitor.ai.model.ContainmentReport;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -41,6 +42,13 @@ public class MonitorTools {
     @Tool(description = "Get running alert counts by severity since the monitor started.")
     public Map<String, Integer> getSeverityCounts() {
         return monitor.summary();
+    }
+
+    @Tool(description = "Get the deterministic excursion-containment report: which lots were on the tool during "
+            + "critical FAB/FIRMWARE/HEALTH alerts, with risk (HIGH/MEDIUM) per lot. Read-only; it does not hold anything.")
+    public ContainmentReport getContainmentReport(
+            @ToolParam(description = "Look-back window in hours, 1-72") int hours) {
+        return monitor.containment(clamp(hours, 1, 72));
     }
 
     private static int clamp(int v, int lo, int hi) {

@@ -8,6 +8,8 @@ services:
     environment:
       SCENARIO_INTERVAL_SECONDS: ${SCENARIO_INTERVAL_SECONDS:-0}   # e.g. 60 = a correlated fault every minute
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}                    # only for the Python /alerts/analyze|report endpoints
+      AI_DISABLED: ${AI_DISABLED:-}                                # true = the Python backend never calls an external AI service
+      LOT_INTERVAL_SECONDS: ${LOT_INTERVAL_SECONDS:-45}
     volumes:
       - alerts-data:/data
     ports:
@@ -19,12 +21,16 @@ services:
       retries: 5
 
   spring-ai:
-    build: ./spring_ai_service
+    build:
+      context: ./spring_ai_service
+      args:
+        MAVEN_PROFILE: ${MAVEN_PROFILE:-}   # bedrock or ollama; blank = Anthropic
     depends_on:
       backend:
         condition: service_healthy
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}   # not needed with SPRING_PROFILES_ACTIVE=ollama or bedrock
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
       SERVICE_API_KEY: ${SERVICE_API_KEY:-}
       MONITOR_BASE_URL: http://backend:8001

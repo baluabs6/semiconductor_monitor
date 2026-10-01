@@ -12,8 +12,10 @@ from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 
 from core.engine import MonitorEngine
+from core.redact import install_logging_redaction
 from core.ai_insights import analyze_alert_burst, summarize_shift
 
+install_logging_redaction()  # mask secrets in every log record (uvicorn, libraries, tracebacks)
 engine = MonitorEngine(db_path=os.environ.get("ALERTS_DB_PATH", "alerts_fastapi.db"))
 
 
@@ -45,6 +47,18 @@ def alerts_history(limit: int = 100, source: Optional[str] = Query(default=None)
 @app.get("/summary")
 def summary():
     return engine.get_summary()
+
+
+@app.get("/lots")
+def lots(limit: int = 50):
+    """Recent lot runs on this tool (newest first)."""
+    return engine.get_lots(limit=limit)
+
+
+@app.get("/containment")
+def containment(hours: float = 8.0):
+    """Deterministic excursion-containment report: which lots were exposed? (proposal only)"""
+    return engine.get_containment(hours=hours)
 
 
 @app.get("/alerts/analyze")
