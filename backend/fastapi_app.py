@@ -5,6 +5,7 @@ Run:
     uvicorn fastapi_app:app --host 0.0.0.0 --port 8001
 """
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -13,7 +14,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from core.engine import MonitorEngine
 from core.ai_insights import analyze_alert_burst, summarize_shift
 
-engine = MonitorEngine(db_path="alerts_fastapi.db")
+engine = MonitorEngine(db_path=os.environ.get("ALERTS_DB_PATH", "alerts_fastapi.db"))
 
 
 @asynccontextmanager

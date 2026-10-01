@@ -1,0 +1,38 @@
+# docker compose up --build
+# Secrets come from your shell / an .env file that is NOT committed (see .env.example).
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      SCENARIO_INTERVAL_SECONDS: ${SCENARIO_INTERVAL_SECONDS:-0}   # e.g. 60 = a correlated fault every minute
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}                    # only for the Python /alerts/analyze|report endpoints
+    volumes:
+      - alerts-data:/data
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  spring-ai:
+    build: ./spring_ai_service
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-}
+      MONITOR_BASE_URL: http://backend:8001
+      RUNBOOKS_DIR: ${RUNBOOKS_DIR:-}   # e.g. /runbooks, with the volume below; blank = bundled SAMPLE runbooks
+    # volumes:
+    #   - ./runbooks:/runbooks:ro
+    ports:
+      - "8080:8080"
+
+volumes:
+  alerts-data:

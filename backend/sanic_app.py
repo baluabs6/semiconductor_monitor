@@ -6,6 +6,7 @@ Run:
     (or) sanic sanic_app:app --host 0.0.0.0 --port 8002 --single-process
 """
 import asyncio
+import os
 import json
 
 from sanic import Sanic, response
@@ -13,7 +14,7 @@ from sanic import Sanic, response
 from core.engine import MonitorEngine
 from core.ai_insights import analyze_alert_burst, summarize_shift
 
-engine = MonitorEngine(db_path="alerts_sanic.db")
+engine = MonitorEngine(db_path=os.environ.get("ALERTS_DB_PATH", "alerts_sanic.db"))
 app = Sanic("semiconductor_monitor_sanic")
 
 

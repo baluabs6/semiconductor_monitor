@@ -1,0 +1,9 @@
+lib/
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+.pytest_cache/
+target/
+.env
+alerts.log

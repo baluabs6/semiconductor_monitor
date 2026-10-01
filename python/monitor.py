@@ -26,6 +26,7 @@ Usage:
 """
 
 import argparse
+import sys
 import ctypes
 import os
 import queue
@@ -44,6 +45,10 @@ from datetime import datetime
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 LIB_DIR = os.path.join(os.path.dirname(THIS_DIR), "lib")
 LOG_PATH = os.path.join(THIS_DIR, "alerts.log")
+
+# Shared redaction helper lives in backend/core/redact.py
+sys.path.insert(0, os.path.join(os.path.dirname(THIS_DIR), "backend"))
+from core.redact import redact  # noqa: E402
 
 CHANNEL_NAMES = ["Temperature", "Pressure", "Vibration", "Voltage"]
 
@@ -124,6 +129,7 @@ class AlertBus:
         self._lock = threading.Lock()
 
     def push(self, alert: Alert):
+        alert.message = redact(alert.message)  # mask secrets before console output and alerts.log
         self._q.put(alert)
 
     def drain_forever(self, stop_event: threading.Event):

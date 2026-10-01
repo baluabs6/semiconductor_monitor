@@ -1,0 +1,81 @@
+{
+ "_comment": "Shared by Python (backend/tests/test_redact.py) and Java (RedactorTest). Regenerate only after reviewing diffs.",
+ "cases": [
+  {
+   "input": "api_key=hunter2 rest",
+   "expected": "api_key=**** rest"
+  },
+  {
+   "input": "password: \"p@ss w0rd\"",
+   "expected": "password: ****"
+  },
+  {
+   "input": "ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxx",
+   "expected": "ANTHROPIC_API_KEY=****"
+  },
+  {
+   "input": "key sk-ant-abc123def456ghi789jkl leaked",
+   "expected": "key **** leaked"
+  },
+  {
+   "input": "Authorization: Bearer abc.def-123",
+   "expected": "Authorization: ****"
+  },
+  {
+   "input": "Bearer abc123def",
+   "expected": "Bearer ****"
+  },
+  {
+   "input": "tok eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk",
+   "expected": "tok ****"
+  },
+  {
+   "input": "db postgres://admin:s3cret@10.0.0.5:5432/x",
+   "expected": "db postgres://****@****:5432/x"
+  },
+  {
+   "input": "mail eng@fab.example.com now",
+   "expected": "mail **** now"
+  },
+  {
+   "input": "host 192.168.1.20 up",
+   "expected": "host **** up"
+  },
+  {
+   "input": "aws AKIAIOSFODNN7EXAMPLE used",
+   "expected": "aws **** used"
+  },
+  {
+   "input": "client_secret=abcd1234 next",
+   "expected": "client_secret=**** next"
+  },
+  {
+   "input": "Temperature out of range: 98.41",
+   "expected": "Temperature out of range: 98.41"
+  },
+  {
+   "input": "Die #12: FAIL on test 'Leakage_Current' (bin 4)",
+   "expected": "Die #12: FAIL on test 'Leakage_Current' (bin 4)"
+  },
+  {
+   "input": "device log: ERROR NULL_PTR_DEREF at 0x0000A3F1 in task_sensor_poll",
+   "expected": "device log: ERROR NULL_PTR_DEREF at 0x0000A3F1 in task_sensor_poll"
+  },
+  {
+   "input": "Controller CPU usage critical: 93.2%",
+   "expected": "Controller CPU usage critical: 93.2%"
+  },
+  {
+   "input": "Low disk space on log volume: 7.5 GB free",
+   "expected": "Low disk space on log volume: 7.5 GB free"
+  },
+  {
+   "input": "version 1.2.3 build 300",
+   "expected": "version 1.2.3 build 300"
+  },
+  {
+   "input": "pwd='a b c' next",
+   "expected": "pwd=**** next"
+  }
+ ]
+}

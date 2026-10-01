@@ -24,12 +24,15 @@ import os
 import random
 import re
 import sqlite3
+import queue
 import threading
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from collections import deque
 from typing import Optional
+
+from core.redact import redact
 
 # --------------------------------------------------------------------------
 # Paths / shared library loading (same C/C++ modules as the console tool)
@@ -42,6 +45,15 @@ DEFAULT_DB_PATH = os.path.join(CORE_DIR, "alerts.db")
 
 CHANNEL_NAMES = ["Temperature", "Pressure", "Vibration", "Voltage"]
 SEVERITY_RANK = {"INFO": 0, "WARNING": 1, "CRITICAL": 2}
+
+# Upper bounds for caller-supplied query sizes (protects memory, DB and LLM prompts)
+MAX_LIMIT = 1000
+MAX_WINDOW_MINUTES = 24 * 60.0
+MAX_WINDOW_HOURS = 24.0 * 14
+
+
+def _clamp(value, lo, hi):
+    return max(lo, min(hi, value))
 
 
 class SensorReading(ctypes.Structure):
@@ -143,8 +155,14 @@ class Deduper:
 
 class MonitorEngine:
     def __init__(self, fault_rate: float = 0.08, cooldown_seconds: float = 5.0,
-                 db_path: str = DEFAULT_DB_PATH, buffer_size: int = 500):
+                 db_path: str = DEFAULT_DB_PATH, buffer_size: int = 500,
+                 scenario_interval: Optional[float] = None):
         self.fault_rate = fault_rate
+        # Seconds between scripted multi-subsystem fault scenarios; 0 disables (default).
+        # Env: SCENARIO_INTERVAL_SECONDS
+        self.scenario_interval = (float(os.environ.get("SCENARIO_INTERVAL_SECONDS", "0"))
+                                  if scenario_interval is None else scenario_interval)
+        self.scenarios = []  # ground truth for evaluation: [{name, start, end, first_alert_id, last_alert_id}]
         self.db_path = db_path
         self.dedup = Deduper(cooldown_seconds)
         self.buffer = deque(maxlen=buffer_size)
@@ -155,6 +173,8 @@ class MonitorEngine:
         self._started = False
         self.daq = None
         self.anomaly = None
+        self._write_q = queue.Queue()
+        self._writer = None
         self._init_db()  # also initializes self._id_counter, resumed from any existing DB rows
 
     # -- lifecycle ---------------------------------------------------------
@@ -168,13 +188,27 @@ class MonitorEngine:
         self.daq.init_daq(int(time.time()))
         self.anomaly.init_engine(50)
 
+        self._writer = threading.Thread(target=self._writer_loop, name="alert-writer", daemon=True)
+        self._writer.start()
+
         loops = [self._fab_loop, self._ate_loop, self._firmware_loop, self._health_loop]
+        if self.scenario_interval > 0:
+            from core.simulator import run_scenarios
+            loops.append(lambda: run_scenarios(self, self._stop_event, self.scenario_interval))
         self._threads = [threading.Thread(target=fn, daemon=True) for fn in loops]
         for t in self._threads:
             t.start()
 
-    def stop(self):
+    def stop(self, timeout: float = 5.0):
+        """Stop monitor threads, then flush every queued alert to SQLite before returning."""
         self._stop_event.set()
+        deadline = time.time() + timeout
+        for t in self._threads:
+            t.join(max(0.0, deadline - time.time()))
+        self._write_q.put(None)  # sentinel: writer drains the queue, then exits
+        if self._writer is not None:
+            self._writer.join(max(0.5, deadline - time.time()))
+        self._writer = None
         self._started = False
 
     # -- persistence ---------------------------------------------------------
@@ -190,6 +224,9 @@ class MonitorEngine:
                 message TEXT NOT NULL
             )"""
         )
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_src_ts ON alerts(source, timestamp)")
         conn.commit()
         # Resume the id sequence after whatever is already in this DB file,
         # so restarting against an existing alerts.db never collides with
@@ -202,19 +239,51 @@ class MonitorEngine:
         self._id_counter = itertools.count(max_id + 1)
 
     def _persist(self, alert: Alert):
+        """Queue the alert; a single writer thread does the SQLite I/O so sensor loops never block on disk."""
+        if self._writer is None:      # engine not started (e.g. unit tests): write synchronously
+            self._write_batch([alert])
+        else:
+            self._write_q.put(alert)
+
+    def _write_batch(self, alerts):
         conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT INTO alerts (id, timestamp, source, severity, message) VALUES (?,?,?,?,?)",
-            (alert.id, alert.timestamp, alert.source, alert.severity, alert.message),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.executemany(
+                "INSERT INTO alerts (id, timestamp, source, severity, message) VALUES (?,?,?,?,?)",
+                [(a.id, a.timestamp, a.source, a.severity, a.message) for a in alerts],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _writer_loop(self):
+        done = False
+        while not done:
+            batch = []
+            item = self._write_q.get()          # block until there is work
+            while True:
+                if item is None:
+                    done = True
+                else:
+                    batch.append(item)
+                if done or len(batch) >= 200:
+                    break
+                try:
+                    item = self._write_q.get_nowait()
+                except queue.Empty:
+                    break
+            if batch:
+                try:
+                    self._write_batch(batch)
+                except Exception as e:  # never let a DB error kill the writer thread
+                    print(f"[engine] failed to persist {len(batch)} alert(s): {e}")
 
     # -- emission ---------------------------------------------------------
 
     def _emit(self, source: str, severity: str, message: str, key: Optional[str] = None):
         if key is not None and not self.dedup.should_emit(key, severity):
             return
+        message = redact(message)  # mask secrets before buffer / SQLite / API / WebSocket / LLM
         alert = Alert(
             id=next(self._id_counter),
             timestamp=datetime.now().isoformat(timespec="milliseconds"),
@@ -232,6 +301,7 @@ class MonitorEngine:
     # -- query API (used by all three backends) ---------------------------
 
     def get_alerts(self, limit: int = 50, severity: Optional[str] = None):
+        limit = int(_clamp(limit, 1, MAX_LIMIT))
         with self.buffer_lock:
             items = list(self.buffer)
         if severity:
@@ -249,6 +319,7 @@ class MonitorEngine:
     def get_recent_window(self, minutes: float = 5.0):
         """In-memory alerts from the last N minutes -- used to feed a burst
         of recent activity to the AI root-cause hypothesis."""
+        minutes = _clamp(minutes, 0.0, MAX_WINDOW_MINUTES)
         cutoff = datetime.now() - timedelta(minutes=minutes)
         with self.buffer_lock:
             items = list(self.buffer)
@@ -259,6 +330,7 @@ class MonitorEngine:
 
     def get_history_window(self, hours: float = 8.0, source: Optional[str] = None):
         """Persisted alerts from the last N hours -- used for shift reports."""
+        hours = _clamp(hours, 0.0, MAX_WINDOW_HOURS)
         cutoff = datetime.now() - timedelta(hours=hours)
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -273,6 +345,7 @@ class MonitorEngine:
         return [dict(r) for r in rows]
 
     def get_history(self, limit: int = 100, source: Optional[str] = None):
+        limit = int(_clamp(limit, 1, MAX_LIMIT))
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         q = "SELECT * FROM alerts"

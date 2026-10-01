@@ -18,6 +18,8 @@ in an API response rather than a 500 error.
 import os
 from typing import Dict, List, Optional, Tuple
 
+from core.redact import redact
+
 try:
     import anthropic
 except ImportError:  # pragma: no cover - exercised only if the package is missing
@@ -37,7 +39,7 @@ def _get_client() -> Tuple[Optional["anthropic.Anthropic"], Optional[str]]:
 
 def _format_alerts(alerts: List[Dict]) -> str:
     return "\n".join(
-        f"- [{a['timestamp']}] {a['source']}/{a['severity']}: {a['message']}"
+        f"- [{a['timestamp']}] {a['source']}/{a['severity']}: {redact(a['message'])}"
         for a in alerts
     )
 
@@ -73,7 +75,7 @@ def analyze_alert_burst(alerts: List[Dict]) -> str:
         )
         return "".join(block.text for block in response.content if block.type == "text").strip()
     except Exception as e:
-        return f"AI analysis failed: {e}"
+        return f"AI analysis failed: {redact(str(e))}"
 
 
 def summarize_shift(alerts: List[Dict], hours: float) -> str:
@@ -104,4 +106,4 @@ def summarize_shift(alerts: List[Dict], hours: float) -> str:
         )
         return "".join(block.text for block in response.content if block.type == "text").strip()
     except Exception as e:
-        return f"AI summary failed: {e}"
+        return f"AI summary failed: {redact(str(e))}"

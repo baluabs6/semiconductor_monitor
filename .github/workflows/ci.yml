@@ -1,0 +1,33 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  native-and-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build C/C++ libraries
+        run: chmod +x build.sh && ./build.sh
+      - name: C++ tests under AddressSanitizer + UBSan
+        run: |
+          g++ -std=c++17 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+              cpp_src/anomaly_engine.cpp cpp_src/test_anomaly.cpp -o test_anomaly
+          ./test_anomaly
+      - name: Python tests
+        run: |
+          pip install pytest -r backend/requirements.txt
+          python -m pytest -q backend/tests
+      - name: Detector backtest (quality gates)
+        run: python backend/tests/backtest_detector.py
+
+  spring-ai:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17", cache: maven }
+      - name: Unit tests (no API key needed)
+        working-directory: spring_ai_service
+        run: mvn -B test

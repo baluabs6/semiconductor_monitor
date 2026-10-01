@@ -5,13 +5,14 @@ Run:
     uvicorn blacksheep_app:app --host 0.0.0.0 --port 8003
 """
 import asyncio
+import os
 
 from blacksheep import Application, Request, WebSocket, json
 
 from core.engine import MonitorEngine
 from core.ai_insights import analyze_alert_burst, summarize_shift
 
-engine = MonitorEngine(db_path="alerts_blacksheep.db")
+engine = MonitorEngine(db_path=os.environ.get("ALERTS_DB_PATH", "alerts_blacksheep.db"))
 app = Application()
 
 
